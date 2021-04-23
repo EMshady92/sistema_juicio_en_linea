@@ -1,0 +1,461 @@
+<?php
+
+namespace App\Http\Controllers;
+
+use Illuminate\Http\Request;
+
+use App\Http\Requests;
+use App\Http\Controllers\Controller;
+use DB;
+use App\firmaElectronicaModel;
+use Illuminate\Support\Facades\Auth;
+use Crypt;
+
+
+
+class firmaElectronicaController extends Controller
+{
+        public function __construct()
+    {
+      $this->middleware('auth');
+  }
+    /**
+     * Display a listing of the resource.
+     *
+     * @return \Illuminate\Http\Response
+     */
+    public function index()
+    {
+
+        $firmas=DB::table('firmaelectronica')->join('users','users.id','=','firmaelectronica.id_usuario')->select('firmaelectronica.*','users.name','users.email','users.estado',
+        'users.funcion','users.tipo_usuario')->get();
+
+        return view('firmasElectronicas.index',['firmas'=>$firmas]);
+        
+
+    }
+
+    /**
+     * Show the form for creating a new resource.
+     *
+     * @return \Illuminate\Http\Response
+     */
+    public function create()
+    {
+
+ $usuarios=DB::table('users')->where('estado','=','ACTIVO')->get();
+
+        return view('firmasElectronicas.create',['usuarios'=>$usuarios]);
+     
+     
+  
+}
+
+    public function validaFirma(Request $request){
+        if ($request->ajax()) { 
+        $user=$request->get('usuario');
+        $usuario=DB::table('firmaelectronica')->where('id_usuario','=',$user)->first();
+        return response()->json(['usuario'=>$usuario]);
+          }
+    }
+        //
+
+    /**
+     * Store a newly created resource in storage.
+     *
+     * @param  \Illuminate\Http\Request  $request
+     * @return \Illuminate\Http\Response
+     */
+    public function store(Request $request)
+    {
+         $user=Auth::user();
+        $password=$request->get('password');
+        $usuario=DB::table('users')->where('id','=',$request->get('usuario'))->first();
+        $serial = DB::table('firmaelectronica')->orderBy('serial', 'desc')->first();
+      
+        if($serial == null){
+        $serial="000001";
+
+        }else{
+            $serial=intval($serial->serial+1);
+            $serial= str_pad($serial, 0, "0", STR_PAD_LEFT);           
+
+        }
+
+          $config = array('config' => 'ssl/openssl.cnf',
+        'encrypt_key' => true,
+        "private_key_bits" => 4096,
+        'private_key_type' => OPENSSL_KEYTYPE_RSA,
+        'digest_alg' => 'sha512'
+        );
+        
+        $CA_CERT = "ssl/cert/SIJEL.cer";
+        $CA_KEY  = "ssl/key/SIJEL.key";
+        $req_key = openssl_pkey_new($config);
+        
+        //$config = array("config" => "ssl/openssl.cnf");
+      
+        
+        if(openssl_pkey_export ($req_key, $out_key)) {
+        $dn = array(
+                 "countryName" => "MX",
+           "stateOrProvinceName" => "Zacatecas",
+           "localityName" => "Guadalupe",
+           "organizationName" => "Tribunal de Justicia Administrativa",
+           "organizationalUnitName" => "TECNORED",
+           "commonName" => $usuario->name,
+           "emailAddress" => $usuario->email
+                );
+        $req_csr  = openssl_csr_new ($dn, $req_key);
+        $req_cert = openssl_csr_sign($req_csr, "file://$CA_CERT", "file://$CA_KEY", 365);
+        if(openssl_x509_export ($req_cert, $out_cert)) {
+                     $fecha=date("m-d-y");  
+openssl_x509_export_to_file($out_cert, "ssl/cert/$usuario->email-$fecha.cer");
+openssl_pkey_export_to_file($out_key, "ssl/key/$usuario->email-$fecha.key");
+$a_key = openssl_pkey_get_details($out_key);
+file_put_contents('ssl/cert/$usuario->email-$fecha-Pub.key', $a_key['key']);
+ // Libera la llave privada
+    openssl_free_key($out_cert);
+
+        
+        $firma = new firmaElectronicaModel;
+          $firma->fill([
+        'password' => Crypt::encrypt($request->password),
+       'certificado'=>$out_cert,
+       'clave_privada'=>$out_key,
+       'clave_publica'=>$out_key,
+       'id_usuario'=>$usuario->id,
+       'serial'=>$serial,
+       'captura'=>$user->name,
+        'cert'=>"$usuario->email-$fecha.cer",
+        'llave'=>"$usuario->email-$fecha.key",
+         'llave_publica'=>"$usuario->email-$fecha.-Pub.key"
+
+       ]);
+      // $firma->password = Crypt::encrypt($request->password);
+       //$firma->certificado=$out_cert;
+       //$firma->clave_privada=$out_key;
+     //  $firma->id_usuario=$usuario->id;
+      // $firma->serial=$serial;
+       //$firma->captura=$user->name;
+       // $firma->cert="$usuario->email-$fecha.cer";
+        //$firma->llave="$usuario->email-$fecha.key";
+       //  $firma->password= Crypt::encrypt($request->get('password'));
+
+       if( $firma->save()){
+          return view('firmasElectronicas.detalle',['usuario'=>$usuario,'firma'=>$firma,'out_key'=>$out_key,'out_key'=>$out_key]);
+        //print "<h1>Certificado X509</h1><pre>$CadCertificado</pre><h1>Clave privada</h1><pre>$CadClave</pre";
+       }
+
+        
+        // Mostrar cualquier error que ocurra
+        while (($e = openssl_error_string()) !== false) {
+            echo $e . "\n";
+        }
+                echo "$out_key\n";
+                echo "$out_cert\n";
+                }
+        else    echo "Failed Cert\n";
+        }
+else            echo "FailedKey\n";
+
+        
+      
+    }
+
+    /**
+     * Display the specified resource.
+     *
+     * @param  int  $id
+     * @return \Illuminate\Http\Response
+     */
+    public function show($id)
+    {
+$password=$request->get('password');
+        $usuario=DB::table('users')->where('id','=',$request->get('usuario'))->first();
+        $serial = DB::table('firmaelectronica')->orderBy('serial', 'desc')->first();
+        if($serial == null){
+        $serial="000001";
+
+        }else{
+            $serial=$serial+1;
+            $serial= str_pad($serial, 0, "0", STR_PAD_LEFT);           
+
+        }
+
+        $config = array("config" => "ssl/openssl.cnf");
+        $dn = array(
+           "countryName" => "MX",
+           "stateOrProvinceName" => "Zacatecas",
+           "localityName" => "Guadalupe",
+           "organizationName" => "Tribunal de Justicia Administrativa",
+           "organizationalUnitName" => "TECNORED",
+           "commonName" => $usuario->name,
+           "emailAddress" => $usuario->email
+        );
+        
+        
+        // Asumimos que este script está establecido para recivir una CSR que ha
+        // sido pegada al área de texto desde otra página
+        
+        // Firmaremos la petición usando nuestro propio certificado de "autoridad
+        // certificadora". También puede usar cualquier certificado para firmar otro, pero
+        // el proceso no vale de nada a menos que el certificado de firma sea acreditado
+        // por el software/usuarios que tratarán con el certificado recién firmado
+        $req_key = openssl_pkey_new();
+         $req_csr  = openssl_csr_new ($dn, $req_key);
+         
+        // Necesitamos nuestro certificado de AC y su clave privada
+        $cacert = "file://ssl/cert/SIJEL.cer";
+        $privkey = array("file://ssl/key/SIJEL.key", $password);
+        
+        $usercert = openssl_csr_sign($req_csr, $cacert, $privkey, 365, array('digest_alg'=>'sha256'),$serial );
+        
+        // Ahora mostramos el certificado generado por lo que el ususario puede
+        // copiarlo y pegarlo a su configuración local (tal como un archivo
+        // para guardar el certificado para su servidor SSL)
+        // Exportamos a una cadena tanto el certificado como la clave privada
+           openssl_x509_export($usercert, $CadCertificado);
+           openssl_pkey_export($privkey, $CadClave, 'micontrasena');
+         
+       //    print "<h1>Certificado X509</h1><pre>$CadCertificado</pre><h1>Clave privada</h1><pre>$CadClave</pre";
+           
+        openssl_x509_export_to_file($usercert, "ssl/cert/"+$usuario->email+".cer");
+        openssl_pkey_export_to_file($privkey, "ssl/key/"+$usuario->email+".key");
+        
+        
+        // Mostrar cualquier error que ocurra
+        while (($e = openssl_error_string()) !== false) {
+            echo $e . "\n";
+        }
+
+  
+    }
+
+    /**
+     * Show the form for editing the specified resource.
+     *
+     * @param  int  $id
+     * @return \Illuminate\Http\Response
+     */
+    public function edit($id)
+    {
+         // Se crea el par de claves
+    $Claves = openssl_pkey_new();
+ 
+    // Se guarda la clave pública en un archivo
+   $Datos = openssl_pkey_get_details($Claves);
+   file_put_contents('/ssl/key', $Datos['key']);
+ 
+   openssl_pkey_free($Claves); // Liberación de las claves
+ 
+   // Recuperación exclusivamente de la clave pública
+   $ClavePublica = openssl_pkey_get_public('file:///ssl/key/miclave.pub');
+ 
+   if($ClavePublica)
+     print 'Clave recuperada satisfactoriamente';
+   else
+     print ' Fallo al intentar leer la clave';
+        //
+    }
+
+    /**
+     * Update the specified resource in storage.
+     *
+     * @param  \Illuminate\Http\Request  $request
+     * @param  int  $id
+     * @return \Illuminate\Http\Response
+     */
+    public function update(Request $request, $id)
+    {
+        //
+    }
+
+    /**
+     * Remove the specified resource from storage.
+     *
+     * @param  int  $id
+     * @return \Illuminate\Http\Response
+     */
+    public function destroy($id)
+    {
+        // traer las claves públicas para nuestros destinatarios, y prepararlas
+$fp = fopen("/src/openssl-0.9.6/demos/maurice/cert.pem", "r");
+$cert = fread($fp, 8192);
+fclose($fp);
+$pk1 = openssl_get_publickey($cert);
+// Repetir para el segundo destinatario
+$fp = fopen("/src/openssl-0.9.6/demos/sign/cert.pem", "r");
+$cert = fread($fp, 8192);
+fclose($fp);
+$pk2 = openssl_get_publickey($cert);
+
+// sellar el mensaje, sólo los propietarios de $pk1 y $pk2 pueden desencriptar $sealed
+// con las claves $ekeys[0] y $ekeys[1] respectivamente.
+openssl_seal($data, $sealed, $ekeys, array($pk1, $pk2));
+
+// liberar las claves de la memoria
+openssl_free_key($pk1);
+openssl_free_key($pk2);
+        //
+    }
+    
+    public function invoice($id){
+        
+         $id = Crypt::decrypt($id); 
+         
+        $pub_key = openssl_pkey_get_public(file_get_contents('ssl/cert/MiCertificado.cer'));
+$keyData = openssl_pkey_get_details($pub_key);
+file_put_contents('ssl/key/key.pub', $keyData['key']);
+
+          $firma=DB::table('firmaelectronica')->join('users','users.id','=','firmaelectronica.id_usuario')->select('firmaelectronica.*','users.name','users.email','users.estado',
+        'users.funcion','users.tipo_usuario')->where('firmaelectronica.id','=',$id)->first();
+
+        $xmlstr =" <<<XML
+<?xml version='1.0' standalone='yes'?>
+<acuses>
+ <acuse>
+  <titulo>PHP: Acuse de alta al servicio de firma electrónica</titulo>
+   <serial>$firma->serial</serial>
+   <nombre>$firma->name</nombre>
+   <email>$firma->email</email>
+   <capturo>$firma->captura</capturo>
+   <fecha>$firma->created_at</fecha>
+  </acuse>
+  
+  <emisor>
+    <nombre_emisor> Tribunal de Justicia Administrativa del estado de Zacatecas</nombre_emisor>
+    <email_emisor> admin_sis@sijel.com.mx</email_emisor>
+  </emisor>
+  
+    <certificado>
+    <cert>$firma->certificado</cert>
+  </certificado>
+  
+   <clave_privada>
+    <cert>$firma->clave_privada</cert>
+  </clave_privada>
+  
+ </acuse>
+</acuses>
+XML";
+
+$Mensaje = $xmlstr;
+
+  // traer las claves públicas para nuestros destinatarios, y prepararlas
+
+$pk1 = openssl_x509_read('file://ssl/cert/'.$firma->cert);
+$pk2 = openssl_x509_read('file://ssl/cert/SIJEL.cer');
+
+// sellar el mensaje, sólo los propietarios de $pk1 y $pk2 pueden desencriptar $sealed
+// con las claves $ekeys[0] y $ekeys[1] respectivamente.
+$iv = openssl_random_pseudo_bytes(32);
+$Long= openssl_seal($Mensaje, $sealed, $ekeys, array($pk1,$pk2),"AES256",$iv);
+
+ $envelopeKey = $ekeys[0];
+ $crypted = base64_encode($envelopeKey) . ':' . base64_encode($sealed);
+ 
+ $envelopeKey2 = $ekeys[1];
+ $crypted2 = base64_encode($envelopeKey2) . ':' . base64_encode($sealed);
+ 
+
+        setlocale(LC_ALL, 'es_ES');
+        $date = date('Y-m-d');
+        $fecha = strftime("%A %d de %B del %Y", strtotime($date));
+        
+        
+     //print_r($);
+     $view =  \View::make('firmasElectronicas.invoice', compact('fecha','firma','crypted','crypted2'))->render();
+     //->setPaper($customPaper, 'landscape');
+     $pdf = \App::make('dompdf.wrapper');
+     $pdf->loadHTML($view);
+     return $pdf->stream('ACUSE FIEL.pdf');
+        
+        
+    }
+    
+    public function valida_fiel(){
+          $nombre_fichero = 'ssl/key/daniel24992@gmail.com-03-01-21.key';
+
+     if (file_exists($nombre_fichero)) {
+         echo "El fichero $nombre_fichero existe";
+     } else {
+         echo "El fichero $nombre_fichero no existe";
+     }
+     
+             
+     $certFile = file_get_contents('ssl/cert/daniel24992@gmail.com-03-01-21.cer');
+     $keyFile = file_get_contents('ssl/key/daniel24992@gmail.com-03-01-21.key');
+     $keyPassphrase = "123";
+     $keyCheckData = array(0=>$keyFile,1=>$keyPassphrase);
+     $result = openssl_x509_check_private_key($certFile,$keyCheckData);
+     
+
+             // Mostrar cualquier error que ocurra
+             while (($e = openssl_error_string()) !== false) {
+                echo $e . "\n";
+            }
+     var_dump($result);
+     
+}
+
+public function ejemplo(){
+    return view ('firmasElectronicas.ejemplo');
+}
+public function ejemplo1(request $request){
+    
+        $certificado=$request->file('certificado');
+    $llave=$request->file('llaveprivada');
+    $pass=$request->get('password');
+    
+    //Datos que se quieren firmar:
+$datos = 'Este texto será firmado. Thanks for your attention :)';
+//Se deben crear dos claves aparejadas, una clave pública y otra privada
+//A continuación el array de configuración para la creación del juego de claves
+$configArgs = array(
+    'config' => 'ssl/openssl.cnf', //<-- esta ruta es necesaria si trabajas con XAMPP
+    'private_key_bits' => 2048,
+    'private_key_type' => OPENSSL_KEYTYPE_RSA
+);
+$resourceNewKeyPair = openssl_pkey_new($configArgs);
+if (!$resourceNewKeyPair) {
+    echo 'Puede que tengas problemas con la ruta indicada en el array de configuración "$configArgs" ';
+    echo openssl_error_string(); //en el caso que la función anterior de openssl arrojará algun error, este sería visualizado gracias a esta línea
+    exit;
+}
+
+$resourceNewKeyPair = openssl_pkey_get_public(file_get_contents($certificado));
+var_dump($resourceNewKeyPair);
+
+//obtengo del recurso $resourceNewKeyPair la clave publica como un string 
+$details = openssl_pkey_get_details($resourceNewKeyPair);
+print_r($details);
+$publicKeyPem = $details['key'];
+//obtengo la clave privada como string dentro de la variable $privateKeyPem (la cual es pasada por referencia)
+if (!openssl_pkey_export($resourceNewKeyPair, $privateKeyPem, 'zacatecas8', $configArgs)) {
+    echo openssl_error_string(); //en el caso que la función anterior de openssl arrojará algun error, este sería visualizado gracias a esta línea
+    exit;
+}
+//guardo la clave publica y privada en disco:
+file_put_contents('private_key.pem', $privateKeyPem);
+file_put_contents('public_key.pem', $publicKeyPem);
+//si bien ya tengo cargado el string de la clave privada, lo voy a buscar a disco para verificar que el archivo private_key.pem haya sido correctamente generado:
+$privateKeyPem = file_get_contents('private_key.pem');
+//obtengo la clave privada como resource desde el string
+$resourcePrivateKey = openssl_get_privatekey($privateKeyPem);
+//crear la firma dentro de la variable $firma (la cual es pasada por referencia)
+if (!openssl_sign($datos, $firma, $resourcePrivateKey, OPENSSL_ALGO_SHA256)) {
+    echo openssl_error_string(); //en el caso que la función anterior de openssl arrojará algun error, este sería visualizado gracias a esta línea
+    exit;
+}
+// guardar la firma en disco:
+file_put_contents('signature.dat', $firma);
+// comprobar la firma
+if (openssl_verify($datos, $firma, $publicKeyPem, 'sha256WithRSAEncryption') === 1) {
+    echo 'la firma es valida y los datos son confiables';
+} else {
+    echo 'la firma es invalida y/o los datos fueron alterados';
+}
+    
+}
+}
